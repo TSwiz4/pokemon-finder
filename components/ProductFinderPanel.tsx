@@ -26,7 +26,7 @@ const CHAINS: { slug: string; label: string; emoji: string; live: boolean }[] = 
 ];
 
 const RADIUS_OPTIONS = [5, 10, 25, 50];
-const SCAN_LIMIT = 6;
+const SCAN_LIMIT = 3;
 const DEFAULT_CENTER = { lat: 28.0534, lng: -82.6817 }; // Oldsmar, FL
 
 const CHAIN_EMOJI: Record<string, string> = {
@@ -119,7 +119,7 @@ export default function ProductFinderPanel({ allStores, onFlyToStore, onSearchAr
     const live = activeChains().filter((c) => CHAINS.find((x) => x.slug === c)?.live);
     if (!live.length) { setStatus('Pick Target — it’s the only live-readable chain today.'); setTimeout(() => setStatus(''), 5000); return; }
     setScanning(true);
-    setStatus(`Scanning nearest ${SCAN_LIMIT} store(s)…`);
+    setStatus(`Scanning nearest ${SCAN_LIMIT} store(s)… (~1–2 min, paced to stay un-blocked)`);
     try {
       const res = await fetch('/api/inventory/scan', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },

@@ -24,8 +24,12 @@ const SECRET = process.env.SCANNER_WORKER_SECRET || '';
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
 
-// Hosts that sit behind Akamai and need the real-browser path.
-const BROWSER_HOSTS = new Set(['target.com', 'www.target.com', 'redsky.target.com']);
+// NOTE: headless Chromium is FINGERPRINTED and CAPTCHA'd by Akamai, whereas a
+// plain fetch from a cooled residential IP at low volume passes cleanly. So we
+// route everything through plain fetch. The 1-hour scan cooldown keeps volume
+// low enough that the IP stays un-flagged. (Browser code kept below, unused,
+// in case a future host genuinely needs it.)
+const BROWSER_HOSTS = new Set();
 const WARM_TTL_MS = 8 * 60 * 1000; // re-warm Akamai cookies every ~8 min
 
 if (!SECRET) {

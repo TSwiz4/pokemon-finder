@@ -33,6 +33,7 @@ function initSchema(db: Database.Database) {
       lng REAL NOT NULL,
       store_type TEXT DEFAULT 'retail',
       osm_id TEXT,
+      ext_store_id TEXT,   -- retailer's own store id (e.g. Target RedSky store_id), cached after first lookup
       created_at TEXT DEFAULT (datetime('now'))
     );
 
@@ -185,8 +186,9 @@ function initSchema(db: Database.Database) {
 // Safe migrations for existing DBs missing new columns
 function migrate(db: Database.Database) {
   const storesCols = (db.prepare("PRAGMA table_info(stores)").all() as { name: string }[]).map(c => c.name);
-  if (!storesCols.includes('store_type')) db.exec("ALTER TABLE stores ADD COLUMN store_type TEXT DEFAULT 'retail'");
-  if (!storesCols.includes('osm_id'))    db.exec("ALTER TABLE stores ADD COLUMN osm_id TEXT");
+  if (!storesCols.includes('store_type'))   db.exec("ALTER TABLE stores ADD COLUMN store_type TEXT DEFAULT 'retail'");
+  if (!storesCols.includes('osm_id'))       db.exec("ALTER TABLE stores ADD COLUMN osm_id TEXT");
+  if (!storesCols.includes('ext_store_id')) db.exec("ALTER TABLE stores ADD COLUMN ext_store_id TEXT");
 
   const restocksCols = (db.prepare("PRAGMA table_info(restocks)").all() as { name: string }[]).map(c => c.name);
   if (!restocksCols.includes('restock_type')) db.exec("ALTER TABLE restocks ADD COLUMN restock_type TEXT DEFAULT 'instore'");

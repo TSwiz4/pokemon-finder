@@ -145,24 +145,36 @@ function parseTcinStock(data: Record<string, unknown>, tcin: string): TcinStock 
 
 /**
  * Live per-store stock for a list of Target TCINs near lat/lng.
- * Resolves the store internally and returns a map keyed by TCIN.
- * Returns null if the store couldn't be resolved (caller marks the store failed).
+ *
+ * RedSky/Akamai is BURST-rate-limited: a clean residential IP serves requests
+ * fine as long as they're spaced out (~8s) — fire rapidly and it CAPTCHAs. So
+ * we pace every call. Pass `knownStoreId` to skip the store-finder call (cache
+ * it — a store's RedSky id never changes), and use a big batch so one call
+ * covers many TCINs. Returns null if the store couldn't be resolved.
  */
 export async function scanTargetStore(
   lat: number,
   lng: number,
   tcins: string[],
-  opts: { zip?: string; state?: string } = {},
+  opts: { zip?: string; state?: string; knownStoreId?: string; paceMs?: number; batchSize?: number } = {},
 ): Promise<{ storeId: string; stock: Map<string, TcinStock> } | null> {
-  const storeId = await findTargetStoreId(lat, lng);
-  if (!storeId) return null;
+  const paceMs = opts.paceMs ?? 8000;
+  const batchSize = opts.batchSize ?? 25;
+  const pace = () => new Promise((r) => setTimeout(r, paceMs));
+
+  let storeId = opts.knownStoreId ?? null;
+  if (!storeId) {
+    storeId = await findTargetStoreId(lat, lng);
+    if (!storeId) return null;
+    await pace(); // space the finder call from the first stock call
+  }
 
   const zip = opts.zip ?? '34677';
   const state = opts.state ?? 'FL';
   const stock = new Map<string, TcinStock>();
 
-  for (let i = 0; i < tcins.length; i += 10) {
-    const batch = tcins.slice(i, i + 10);
+  for (let i = 0; i < tcins.length; i += batchSize) {
+    const batch = tcins.slice(i, i + batchSize);
     const data = await queryRedSky(batch, storeId, zip, state, lat, lng);
     if (data) {
       for (const tcin of batch) stock.set(tcin, parseTcinStock(data, tcin));
@@ -171,7 +183,7 @@ export async function scanTargetStore(
         stock.set(tcin, { tcin, status: 'CHECK_FAILED', available: false, quantity: null, price: null });
       }
     }
-    if (i + 10 < tcins.length) await new Promise((r) => setTimeout(r, 400));
+    if (i + batchSize < tcins.length) await pace();
   }
   return { storeId, stock };
 }

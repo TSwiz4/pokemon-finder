@@ -17,8 +17,10 @@ import { scanTargetStore } from '@/lib/scanner';
 import { hasResidentialWorker } from '@/lib/retailFetch';
 
 const EARTH_RADIUS_MI = 3958.8;
-const DEFAULT_LIMIT = 6;
-const MAX_LIMIT = 15;
+const DEFAULT_LIMIT = 3;
+const MAX_LIMIT = 10;
+// RedSky is burst-rate-limited — space calls ~8s apart to stay un-flagged.
+const PACE_MS = 8000;
 // Global 1-hour cooldown between Target scans — protects the shared IP from
 // Akamai rate-limiting. Enforced server-side and surfaced to the UI timer.
 const SCAN_COOLDOWN_MS = 60 * 60 * 1000;
@@ -60,7 +62,7 @@ function haversineMiles(lat1: number, lng1: number, lat2: number, lng2: number):
   return 2 * EARTH_RADIUS_MI * Math.asin(Math.sqrt(a));
 }
 
-interface StoreRow { id: number; name: string; chain: string; address: string; lat: number; lng: number; }
+interface StoreRow { id: number; name: string; chain: string; address: string; lat: number; lng: number; ext_store_id: string | null; }
 interface SkuRow { sku: string; product_id: number; product_name: string; }
 
 // Per-store live scanning is only implemented for these chains today.
@@ -144,7 +146,7 @@ export async function POST(req: NextRequest) {
   const lngDelta = radius / (69 * Math.max(Math.cos((lat * Math.PI) / 180), 0.01));
   const placeholders = scanChains.map(() => '?').join(',');
   const candidates = (db.prepare(`
-    SELECT id, name, chain, address, lat, lng FROM stores
+    SELECT id, name, chain, address, lat, lng, ext_store_id FROM stores
     WHERE store_type = 'retail' AND chain IN (${placeholders})
       AND lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?
   `).all(...scanChains, lat - latDelta, lat + latDelta, lng - lngDelta, lng + lngDelta) as StoreRow[])
@@ -166,23 +168,32 @@ export async function POST(req: NextRequest) {
     INSERT INTO fills (store_id, product_id, quantity, store_name, chain, address, lat, lng, product_label)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
+  const saveStoreId = db.prepare('UPDATE stores SET ext_store_id = ? WHERE id = ? AND ext_store_id IS NULL');
 
   const stores: { id: number; name: string; chain: string; distance_mi: number; status: string; in_stock: number; wrote: number; }[] = [];
   let wroteRows = 0;
   let inStockStores = 0;
   let newFills = 0;
 
+  let storeIdx = 0;
   for (const store of candidates) {
     if (store.chain !== 'target' || tcins.length === 0) {
       stores.push({ id: store.id, name: store.name, chain: store.chain, distance_mi: store.distance_mi, status: 'SKIPPED', in_stock: 0, wrote: 0 });
       continue;
     }
+    // Pace between stores so RedSky doesn't see a burst.
+    if (storeIdx > 0) await new Promise((r) => setTimeout(r, PACE_MS));
+    storeIdx++;
 
-    const result = await scanTargetStore(store.lat, store.lng, tcins);
+    const result = await scanTargetStore(store.lat, store.lng, tcins, {
+      knownStoreId: store.ext_store_id ?? undefined,
+      paceMs: PACE_MS,
+    });
     if (!result) {
       stores.push({ id: store.id, name: store.name, chain: store.chain, distance_mi: store.distance_mi, status: 'CHECK_FAILED', in_stock: 0, wrote: 0 });
       continue;
     }
+    if (result.storeId && !store.ext_store_id) saveStoreId.run(result.storeId, store.id);
 
     let storeInStock = 0;
     let wrote = 0;
@@ -211,8 +222,6 @@ export async function POST(req: NextRequest) {
     wroteRows += wrote;
     if (storeInStock > 0) inStockStores++;
     stores.push({ id: store.id, name: store.name, chain: store.chain, distance_mi: store.distance_mi, status: 'OK', in_stock: storeInStock, wrote });
-
-    await new Promise((r) => setTimeout(r, 350)); // gentle pacing between stores
   }
 
   return Response.json({
