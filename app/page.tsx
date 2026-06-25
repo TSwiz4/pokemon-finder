@@ -134,9 +134,16 @@ export default function Home() {
 
   const allStores = [...retailStores, ...onlineStores];
 
-  // The Stock view shows the map (Stock + Map are merged). Geolocation only
-  // fires when the user taps "Use my location" — nothing auto-loads on login.
-  const showMap = (panel === 'feed' && feedTab === 'inventory') || panel === 'finder';
+  // Map tab = store locations only; SKU Finder = SKUs only. No overlap.
+  const mapTab = panel === 'feed' && feedTab === 'inventory';
+
+  // Jump to the Map tab and fly to a store (used by SKU Finder / Fills / feeds).
+  const goToMapStore = (store: Store) => {
+    setFeedTab('inventory');
+    setPanel('feed');
+    setFlyToStore(null);
+    setTimeout(() => setFlyToStore(store), 120);
+  };
 
   return (
     <div style={{ display: 'flex', height: '100vh', background: '#0f1117' }}>
@@ -149,84 +156,71 @@ export default function Home() {
         onLogout={handleLogout}
       />
 
-      <div style={{ display: 'flex', flex: 1, minHeight: 0, justifyContent: showMap ? 'flex-start' : 'center' }}>
-        {/* Map (only when the Map view is selected) */}
-        {showMap && (
-          <div style={{ flex: 1, minWidth: 0, padding: 12 }}>
-            <Map
-              stores={retailStores}
-              onStoreClick={handleStoreClick}
-              onIntelClick={handleIntelClick}
-              onStoresDiscovered={loadStores}
-              flyToStore={flyToStore}
-              searchArea={searchArea}
-            />
-          </div>
-        )}
-
-        {/* Content panel */}
-        <div className="fade-in" key={panel + feedTab} style={{
-          width: showMap ? 370 : 480, maxWidth: '100%',
-          flexShrink: 0, display: 'flex', flexDirection: 'column',
-          background: '#12141c', overflow: 'hidden',
-          borderLeft: '1px solid #2e3347', borderRight: showMap ? 'none' : '1px solid #2e3347',
-        }}>
-          {panel === 'feed' && (
-            <RestockFeed
-              key={feedKey}
-              tab={feedTab}
-              onlineStores={onlineStores}
-              allStores={allStores}
-              onStoreClick={handleStoreClick}
-              onFlyToStore={(store) => {
-                // Set then immediately re-set on next tick so repeat clicks re-trigger the effect.
-                setFlyToStore(null);
-                setTimeout(() => setFlyToStore(store), 0);
-              }}
-              onSearchAreaChange={setSearchArea}
-              onStoresUpdated={loadStores}
-              onUnreadChange={setXUnread}
-            />
-          )}
-          {panel === 'submit' && (
-            <RestockForm
-              stores={allStores}
-              selectedStore={selectedStore}
-              onSubmitted={handleRestockSubmitted}
-              onCancel={() => setPanel('feed')}
-            />
-          )}
-          {panel === 'intel' && selectedStore && (
-            <StoreIntel store={selectedStore} onClose={() => setPanel('feed')} />
-          )}
-          {panel === 'admin' && isAdmin && currentUser && (
-            <AdminPanel currentUserId={currentUser.id} onClose={() => setPanel('feed')} />
-          )}
-          {panel === 'sniper' && isAdmin && (
-            <SniperPanel onClose={() => setPanel('feed')} />
-          )}
-          {panel === 'finder' && (
-            <ProductFinderPanel
-              allStores={allStores}
-              onFlyToStore={(store) => {
-                setFlyToStore(null);
-                setTimeout(() => setFlyToStore(store), 0);
-              }}
-              onSearchAreaChange={setSearchArea}
-              onStoresUpdated={loadStores}
-            />
-          )}
-          {panel === 'fills' && (
-            <FillsFeed
-              allStores={allStores}
-              onFlyToStore={(store) => {
-                setFlyToStore(null);
-                setTimeout(() => setFlyToStore(store), 0);
-              }}
-            />
-          )}
+      {mapTab ? (
+        /* MAP tab — store locations only, full width */
+        <div style={{ flex: 1, minWidth: 0, padding: 12 }}>
+          <Map
+            stores={retailStores}
+            onStoreClick={handleStoreClick}
+            onIntelClick={handleIntelClick}
+            onStoresDiscovered={loadStores}
+            flyToStore={flyToStore}
+            searchArea={searchArea}
+            locationsOnly
+          />
         </div>
-      </div>
+      ) : (
+        <div style={{ display: 'flex', flex: 1, minHeight: 0, justifyContent: 'center' }}>
+          <div className="fade-in" key={panel + feedTab} style={{
+            width: panel === 'finder' ? 520 : 480, maxWidth: '100%',
+            flexShrink: 0, display: 'flex', flexDirection: 'column',
+            background: '#12141c', overflow: 'hidden',
+            borderLeft: '1px solid #2e3347', borderRight: '1px solid #2e3347',
+          }}>
+            {panel === 'feed' && (
+              <RestockFeed
+                key={feedKey}
+                tab={feedTab}
+                onlineStores={onlineStores}
+                allStores={allStores}
+                onStoreClick={handleStoreClick}
+                onFlyToStore={goToMapStore}
+                onSearchAreaChange={setSearchArea}
+                onStoresUpdated={loadStores}
+                onUnreadChange={setXUnread}
+              />
+            )}
+            {panel === 'submit' && (
+              <RestockForm
+                stores={allStores}
+                selectedStore={selectedStore}
+                onSubmitted={handleRestockSubmitted}
+                onCancel={() => setPanel('feed')}
+              />
+            )}
+            {panel === 'intel' && selectedStore && (
+              <StoreIntel store={selectedStore} onClose={() => setPanel('feed')} />
+            )}
+            {panel === 'admin' && isAdmin && currentUser && (
+              <AdminPanel currentUserId={currentUser.id} onClose={() => setPanel('feed')} />
+            )}
+            {panel === 'sniper' && isAdmin && (
+              <SniperPanel onClose={() => setPanel('feed')} />
+            )}
+            {panel === 'finder' && (
+              <ProductFinderPanel
+                allStores={allStores}
+                onFlyToStore={goToMapStore}
+                onSearchAreaChange={setSearchArea}
+                onStoresUpdated={loadStores}
+              />
+            )}
+            {panel === 'fills' && (
+              <FillsFeed allStores={allStores} onFlyToStore={goToMapStore} />
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -148,9 +148,11 @@ interface Props {
   onStoresDiscovered: () => void;
   flyToStore?: Store | null;
   searchArea?: { lat: number; lng: number; radius: number } | null;
+  /** Locations-only mode: hide all SKU/stock UI in popups (Map tab). SKUs live on the SKU Finder. */
+  locationsOnly?: boolean;
 }
 
-export default function Map({ stores, onStoreClick, onIntelClick, onStoresDiscovered, flyToStore, searchArea }: Props) {
+export default function Map({ stores, onStoreClick, onIntelClick, onStoresDiscovered, flyToStore, searchArea, locationsOnly }: Props) {
   const mapRef = useRef<HTMLDivElement>(null);
   const leafletMapRef = useRef<L.Map | null>(null);
   const markersRef = useRef<globalThis.Map<number, L.Marker>>(new globalThis.Map());
@@ -521,8 +523,8 @@ export default function Map({ stores, onStoreClick, onIntelClick, onStoresDiscov
             </div>
           </div>
 
-          {/* Live stock check — Target only */}
-          {popupStore.chain === 'target' && (
+          {/* Live stock check — Target only (hidden in locations-only Map; SKUs live on the SKU Finder) */}
+          {!locationsOnly && popupStore.chain === 'target' && (
             <div style={{ borderBottom: '1px solid #2e3347' }}>
               {!liveStock && !liveStockLoading && !liveStockError && (
                 <div style={{ padding: '8px 14px' }}>
@@ -595,8 +597,8 @@ export default function Map({ stores, onStoreClick, onIntelClick, onStoresDiscov
             </div>
           )}
 
-          {/* SKU stock table (manual/Discord intel) */}
-          {popupStore.store_type === 'retail' && (
+          {/* SKU stock table (manual/Discord intel) — hidden in locations-only Map */}
+          {!locationsOnly && popupStore.store_type === 'retail' && (
             <StockSection
               loading={stockLoading}
               rows={stockRows}

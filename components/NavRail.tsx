@@ -10,8 +10,8 @@ interface NavItem {
 }
 
 const ITEMS: NavItem[] = [
-  { key: 'inventory', glyph: '🗺',  label: 'Stock' },
-  { key: 'finder',    glyph: '🔎', label: 'Finder' },
+  { key: 'inventory', glyph: '🗺',  label: 'Map' },
+  { key: 'finder',    glyph: '🔎', label: 'SKUs' },
   { key: 'online',    glyph: '🌐', label: 'Online' },
   { key: 'xfeed',     glyph: '𝕏',  label: 'Feed' },
   { key: 'fills',     glyph: '🔔', label: 'Fills' },
