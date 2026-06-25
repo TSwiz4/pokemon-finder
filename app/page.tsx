@@ -8,6 +8,7 @@ import StoreIntel from '@/components/StoreIntel';
 import AdminPanel from '@/components/AdminPanel';
 import SniperPanel from '@/components/SniperPanel';
 import ProductFinderPanel from '@/components/ProductFinderPanel';
+import FillsFeed from '@/components/FillsFeed';
 import NavRail, { type NavKey } from '@/components/NavRail';
 import { useRouter } from 'next/navigation';
 
@@ -51,7 +52,7 @@ export interface Restock {
   created_at: string;
 }
 
-type Panel = 'feed' | 'submit' | 'intel' | 'admin' | 'sniper' | 'finder';
+type Panel = 'feed' | 'submit' | 'intel' | 'admin' | 'sniper' | 'finder' | 'fills';
 
 interface CurrentUser {
   id: number;
@@ -116,7 +117,7 @@ export default function Home() {
 
   // Map the left-rail selection onto panels/feed-tabs
   const handleNav = (key: NavKey) => {
-    if (key === 'report') setPanel('submit');
+    if (key === 'fills') setPanel('fills');
     else if (key === 'admin') setPanel('admin');
     else if (key === 'sniper') setPanel('sniper');
     else if (key === 'finder') setPanel('finder');
@@ -124,12 +125,12 @@ export default function Home() {
   };
 
   const activeNav: NavKey | null =
-    panel === 'submit' ? 'report'
+    panel === 'fills' ? 'fills'
     : panel === 'admin' ? 'admin'
     : panel === 'sniper' ? 'sniper'
     : panel === 'finder' ? 'finder'
     : panel === 'feed' ? feedTab
-    : null; // intel has no rail highlight
+    : null; // intel / submit have no rail highlight
 
   const allStores = [...retailStores, ...onlineStores];
 
@@ -213,6 +214,15 @@ export default function Home() {
               }}
               onSearchAreaChange={setSearchArea}
               onStoresUpdated={loadStores}
+            />
+          )}
+          {panel === 'fills' && (
+            <FillsFeed
+              allStores={allStores}
+              onFlyToStore={(store) => {
+                setFlyToStore(null);
+                setTimeout(() => setFlyToStore(store), 0);
+              }}
             />
           )}
         </div>

@@ -101,6 +101,29 @@ function initSchema(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_inventory_store ON inventory(store_id);
     CREATE INDEX IF NOT EXISTS idx_inventory_product ON inventory(product_id);
 
+    -- Fills: shared, global feed of in-stock detections (a SKU transitioning into
+    -- stock at a store). Denormalized so the feed renders without extra joins.
+    CREATE TABLE IF NOT EXISTS fills (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      store_id INTEGER REFERENCES stores(id),
+      product_id INTEGER REFERENCES products(id),
+      quantity INTEGER NOT NULL,
+      store_name TEXT,
+      chain TEXT,
+      address TEXT,
+      lat REAL,
+      lng REAL,
+      product_label TEXT,
+      detected_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_fills_detected ON fills(detected_at);
+
+    -- Key/value app metadata (e.g., last_scan_at for the global scan cooldown).
+    CREATE TABLE IF NOT EXISTS app_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );
+
     -- Auth: users, sessions, activity log --
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

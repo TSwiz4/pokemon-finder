@@ -1,7 +1,13 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import type { Store } from '@/app/page';
+
+function fmtCountdown(secs: number): string {
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
 
 const SETS: { slug: string; label: string }[] = [
   { slug: 'all',               label: 'All sets' },
@@ -60,6 +66,18 @@ export default function ProductFinderPanel({ allStores, onFlyToStore, onSearchAr
   const [status, setStatus] = useState('');
   const [locating, setLocating] = useState(false);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const [cooldown, setCooldown] = useState(0); // seconds until next scan allowed (global)
+
+  // Poll the shared cooldown so the timer reflects scans by anyone, and tick locally.
+  useEffect(() => {
+    const fetchCd = async () => {
+      try { const r = await fetch('/api/inventory/scan'); const d = await r.json(); setCooldown(Math.max(0, d.seconds_remaining ?? 0)); } catch { /* keep */ }
+    };
+    fetchCd();
+    const tick = setInterval(() => setCooldown((c) => (c > 0 ? c - 1 : 0)), 1000);
+    const resync = setInterval(fetchCd, 60000);
+    return () => { clearInterval(tick); clearInterval(resync); };
+  }, []);
 
   const activeChains = (c = chains) => Object.keys(c).filter((k) => c[k]);
 
@@ -97,7 +115,7 @@ export default function ProductFinderPanel({ allStores, onFlyToStore, onSearchAr
 
   // Live scan the nearest N stores, then re-read the finder.
   const scanAndFind = async () => {
-    if (!center) return;
+    if (!center || cooldown > 0) return;
     const live = activeChains().filter((c) => CHAINS.find((x) => x.slug === c)?.live);
     if (!live.length) { setStatus('Pick Target — it’s the only live-readable chain today.'); setTimeout(() => setStatus(''), 5000); return; }
     setScanning(true);
@@ -108,10 +126,18 @@ export default function ProductFinderPanel({ allStores, onFlyToStore, onSearchAr
         body: JSON.stringify({ lat: center.lat, lng: center.lng, radius, chains: activeChains(), limit: SCAN_LIMIT, set: setFilter }),
       });
       const data = await res.json();
-      if (data.error) throw new Error(data.error);
-      const failed = (data.stores ?? []).filter((s: { status: string }) => s.status === 'CHECK_FAILED').length;
-      setStatus(`Scanned ${data.scanned_stores} · ${data.in_stock_stores} with stock${failed ? ` · ${failed} blocked (retry later)` : ''}`);
-      await loadFinder(center.lat, center.lng, radius, setFilter, chains, inStockOnly);
+      if (res.status === 429 || data.cooldown) {
+        setCooldown(Math.max(0, data.seconds_remaining ?? 0));
+        setStatus('On cooldown — one scan per hour (shared).');
+      } else if (data.error) {
+        throw new Error(data.error);
+      } else {
+        setCooldown(data.cooldown_seconds ?? 3600); // start the 1-hour timer
+        const failed = (data.stores ?? []).filter((s: { status: string }) => s.status === 'CHECK_FAILED').length;
+        const fills = data.new_fills ?? 0;
+        setStatus(`Scanned ${data.scanned_stores} · ${data.in_stock_stores} with stock${fills ? ` · ${fills} new fill(s)` : ''}${failed ? ` · ${failed} blocked` : ''}`);
+        await loadFinder(center.lat, center.lng, radius, setFilter, chains, inStockOnly);
+      }
     } catch (e) {
       setStatus(`Scan failed: ${String(e).replace('Error: ', '').slice(0, 60)}`);
     }
@@ -229,15 +255,24 @@ export default function ProductFinderPanel({ allStores, onFlyToStore, onSearchAr
           </button>
         ) : (
           <div style={{ display: 'flex', gap: 6 }}>
-            <button onClick={scanAndFind} disabled={scanning} style={{
-              flex: 1, padding: '8px', background: scanning ? '#4a4f6a' : '#1f8a4c', border: 'none', borderRadius: 7,
-              color: '#fff', fontSize: 12, fontWeight: 800, cursor: scanning ? 'default' : 'pointer',
+            <button onClick={scanAndFind} disabled={scanning || cooldown > 0} style={{
+              flex: 1, padding: '8px', borderRadius: 7, border: 'none',
+              background: scanning ? '#4a4f6a' : cooldown > 0 ? '#242736' : '#1f8a4c',
+              color: cooldown > 0 ? '#8b91a8' : '#fff', fontSize: 12, fontWeight: 800,
+              cursor: scanning || cooldown > 0 ? 'default' : 'pointer',
             }}>
-              {scanning ? '⏳ Scanning…' : `⚡ Scan & find (nearest ${SCAN_LIMIT})`}
+              {scanning ? '⏳ Scanning…'
+                : cooldown > 0 ? `⏳ Next scan in ${fmtCountdown(cooldown)}`
+                : `⚡ Scan & find (nearest ${SCAN_LIMIT})`}
             </button>
             <button onClick={handleLocate} title="Re-locate" style={{
               background: '#242736', border: '1px solid #2e3347', color: '#8b91a8', borderRadius: 7, padding: '0 10px', fontSize: 13, cursor: 'pointer',
             }}>↻</button>
+          </div>
+        )}
+        {cooldown > 0 && (
+          <div style={{ marginTop: 6, fontSize: 9.5, color: '#6b7280' }}>
+            One scan per hour, shared across everyone — protects against rate limits.
           </div>
         )}
 

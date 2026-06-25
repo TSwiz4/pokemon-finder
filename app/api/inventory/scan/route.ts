@@ -19,6 +19,36 @@ import { hasResidentialWorker } from '@/lib/retailFetch';
 const EARTH_RADIUS_MI = 3958.8;
 const DEFAULT_LIMIT = 6;
 const MAX_LIMIT = 15;
+// Global 1-hour cooldown between Target scans — protects the shared IP from
+// Akamai rate-limiting. Enforced server-side and surfaced to the UI timer.
+const SCAN_COOLDOWN_MS = 60 * 60 * 1000;
+
+type DB = ReturnType<typeof getDb>;
+
+function getMeta(db: DB, key: string): string | null {
+  const r = db.prepare('SELECT value FROM app_meta WHERE key = ?').get(key) as { value: string } | undefined;
+  return r?.value ?? null;
+}
+function setMeta(db: DB, key: string, value: string) {
+  db.prepare('INSERT INTO app_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, value);
+}
+function cooldownRemainingMs(db: DB): number {
+  const last = getMeta(db, 'last_scan_at');
+  if (!last) return 0;
+  return Math.max(0, SCAN_COOLDOWN_MS - (Date.now() - Date.parse(last)));
+}
+
+// GET — cooldown status for the scan timer (shared across all logins).
+export async function GET() {
+  const db = getDb();
+  const remaining = cooldownRemainingMs(db);
+  return Response.json({
+    can_scan: remaining === 0,
+    seconds_remaining: Math.ceil(remaining / 1000),
+    cooldown_seconds: SCAN_COOLDOWN_MS / 1000,
+    last_scan_at: getMeta(db, 'last_scan_at'),
+  });
+}
 
 function haversineMiles(lat1: number, lng1: number, lat2: number, lng2: number): number {
   const toRad = (d: number) => (d * Math.PI) / 180;
@@ -30,8 +60,8 @@ function haversineMiles(lat1: number, lng1: number, lat2: number, lng2: number):
   return 2 * EARTH_RADIUS_MI * Math.asin(Math.sqrt(a));
 }
 
-interface StoreRow { id: number; name: string; chain: string; lat: number; lng: number; }
-interface SkuRow { sku: string; product_id: number; }
+interface StoreRow { id: number; name: string; chain: string; address: string; lat: number; lng: number; }
+interface SkuRow { sku: string; product_id: number; product_name: string; }
 
 // Per-store live scanning is only implemented for these chains today.
 const PER_STORE_CHAINS = new Set(['target']);
@@ -83,17 +113,30 @@ export async function POST(req: NextRequest) {
     });
   }
 
+  // Enforce the global cooldown (shared IP protection).
+  const remainingMs = cooldownRemainingMs(db);
+  if (remainingMs > 0) {
+    return Response.json({
+      error: 'cooldown', cooldown: true,
+      seconds_remaining: Math.ceil(remainingMs / 1000),
+      last_scan_at: getMeta(db, 'last_scan_at'),
+    }, { status: 429 });
+  }
+  // Claim the slot immediately so concurrent scans can't slip through.
+  setMeta(db, 'last_scan_at', new Date().toISOString());
+
   // SKUs to scan (Target only today), optionally set-filtered.
   const setClause = setFilter ? 'AND p.set_name = ?' : '';
   const targetSkus = db.prepare(`
-    SELECT cs.sku AS sku, cs.product_id AS product_id
+    SELECT cs.sku AS sku, cs.product_id AS product_id, p.name AS product_name
     FROM chain_skus cs
     JOIN products p ON p.id = cs.product_id
     WHERE cs.chain = 'target' AND cs.confirmed = 1 ${setClause}
   `).all(...(setFilter ? [setFilter] : [])) as SkuRow[];
 
   const tcinToProduct = new Map<string, number>();
-  for (const r of targetSkus) tcinToProduct.set(r.sku, r.product_id);
+  const productLabel = new Map<number, string>();
+  for (const r of targetSkus) { tcinToProduct.set(r.sku, r.product_id); productLabel.set(r.product_id, r.product_name); }
   const tcins = [...tcinToProduct.keys()];
 
   // Bounding box, then nearest-N of the requested per-store chains.
@@ -101,7 +144,7 @@ export async function POST(req: NextRequest) {
   const lngDelta = radius / (69 * Math.max(Math.cos((lat * Math.PI) / 180), 0.01));
   const placeholders = scanChains.map(() => '?').join(',');
   const candidates = (db.prepare(`
-    SELECT id, name, chain, lat, lng FROM stores
+    SELECT id, name, chain, address, lat, lng FROM stores
     WHERE store_type = 'retail' AND chain IN (${placeholders})
       AND lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?
   `).all(...scanChains, lat - latDelta, lat + latDelta, lng - lngDelta, lng + lngDelta) as StoreRow[])
@@ -118,10 +161,16 @@ export async function POST(req: NextRequest) {
       last_checked_at = excluded.last_checked_at,
       source = excluded.source
   `);
+  const prevQty = db.prepare('SELECT quantity FROM inventory WHERE store_id = ? AND product_id = ?');
+  const insertFill = db.prepare(`
+    INSERT INTO fills (store_id, product_id, quantity, store_name, chain, address, lat, lng, product_label)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
 
   const stores: { id: number; name: string; chain: string; distance_mi: number; status: string; in_stock: number; wrote: number; }[] = [];
   let wroteRows = 0;
   let inStockStores = 0;
+  let newFills = 0;
 
   for (const store of candidates) {
     if (store.chain !== 'target' || tcins.length === 0) {
@@ -143,9 +192,18 @@ export async function POST(req: NextRequest) {
         if (productId == null) continue;
         if (stock.status === 'CHECK_FAILED') continue; // don't overwrite good data with a failed probe
         const qty = stock.quantity ?? (stock.available ? 1 : 0);
+        const prev = prevQty.get(store.id, productId) as { quantity: number } | undefined;
+        const wasInStock = (prev?.quantity ?? 0) > 0;
         upsert.run(store.id, productId, qty, 'target_live');
-        if (qty > 0) storeInStock++;
         wrote++;
+        if (qty > 0) {
+          storeInStock++;
+          // A "fill" = a fresh transition into stock. Logged to the shared Fills feed.
+          if (!wasInStock) {
+            insertFill.run(store.id, productId, qty, store.name, store.chain, store.address, store.lat, store.lng, productLabel.get(productId) ?? null);
+            newFills++;
+          }
+        }
       }
     });
     writeAll();
@@ -161,7 +219,10 @@ export async function POST(req: NextRequest) {
     scanned_stores: stores.length,
     in_stock_stores: inStockStores,
     wrote_rows: wroteRows,
+    new_fills: newFills,
     residential_worker: hasResidentialWorker(),
+    cooldown_seconds: SCAN_COOLDOWN_MS / 1000,
+    next_scan_in: SCAN_COOLDOWN_MS / 1000,
     skipped,
     stores,
     checked_at: new Date().toISOString(),
