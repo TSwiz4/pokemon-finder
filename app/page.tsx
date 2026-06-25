@@ -7,6 +7,7 @@ import RestockForm from '@/components/RestockForm';
 import StoreIntel from '@/components/StoreIntel';
 import AdminPanel from '@/components/AdminPanel';
 import SniperPanel from '@/components/SniperPanel';
+import ProductFinderPanel from '@/components/ProductFinderPanel';
 import NavRail, { type NavKey } from '@/components/NavRail';
 import { useRouter } from 'next/navigation';
 
@@ -50,7 +51,7 @@ export interface Restock {
   created_at: string;
 }
 
-type Panel = 'feed' | 'submit' | 'intel' | 'admin' | 'sniper';
+type Panel = 'feed' | 'submit' | 'intel' | 'admin' | 'sniper' | 'finder';
 
 interface CurrentUser {
   id: number;
@@ -118,6 +119,7 @@ export default function Home() {
     if (key === 'report') setPanel('submit');
     else if (key === 'admin') setPanel('admin');
     else if (key === 'sniper') setPanel('sniper');
+    else if (key === 'finder') setPanel('finder');
     else { setFeedTab(key); setPanel('feed'); }
   };
 
@@ -125,6 +127,7 @@ export default function Home() {
     panel === 'submit' ? 'report'
     : panel === 'admin' ? 'admin'
     : panel === 'sniper' ? 'sniper'
+    : panel === 'finder' ? 'finder'
     : panel === 'feed' ? feedTab
     : null; // intel has no rail highlight
 
@@ -132,7 +135,7 @@ export default function Home() {
 
   // The Stock view shows the map (Stock + Map are merged). Geolocation only
   // fires when the user taps "Use my location" — nothing auto-loads on login.
-  const showMap = panel === 'feed' && feedTab === 'inventory';
+  const showMap = (panel === 'feed' && feedTab === 'inventory') || panel === 'finder';
 
   return (
     <div style={{ display: 'flex', height: '100vh', background: '#0f1117' }}>
@@ -200,6 +203,17 @@ export default function Home() {
           )}
           {panel === 'sniper' && isAdmin && (
             <SniperPanel onClose={() => setPanel('feed')} />
+          )}
+          {panel === 'finder' && (
+            <ProductFinderPanel
+              allStores={allStores}
+              onFlyToStore={(store) => {
+                setFlyToStore(null);
+                setTimeout(() => setFlyToStore(store), 0);
+              }}
+              onSearchAreaChange={setSearchArea}
+              onStoresUpdated={loadStores}
+            />
           )}
         </div>
       </div>

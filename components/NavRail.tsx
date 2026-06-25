@@ -1,6 +1,6 @@
 'use client';
 
-export type NavKey = 'inventory' | 'online' | 'xfeed' | 'report' | 'sniper' | 'admin';
+export type NavKey = 'inventory' | 'finder' | 'online' | 'xfeed' | 'report' | 'sniper' | 'admin';
 
 interface NavItem {
   key: NavKey;
@@ -11,6 +11,7 @@ interface NavItem {
 
 const ITEMS: NavItem[] = [
   { key: 'inventory', glyph: '🗺',  label: 'Stock' },
+  { key: 'finder',    glyph: '🔎', label: 'Finder' },
   { key: 'online',    glyph: '🌐', label: 'Online' },
   { key: 'xfeed',     glyph: '𝕏',  label: 'Feed' },
   { key: 'report',    glyph: '➕', label: 'Report' },

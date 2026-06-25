@@ -42,3 +42,6 @@ next-env.d.ts
 
 # local sqlite db (server seeds its own)
 /data
+
+# worker deps (playwright) — home PC only, not for the server
+worker/node_modules

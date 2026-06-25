@@ -1,0 +1,14 @@
+{
+  "name": "pokefinder-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Residential fetch worker for PokemonFinder. Runs on the home PC; uses a real Chromium (Playwright) for Akamai-walled retailers (Target/RedSky) and plain fetch for everything else.",
+  "scripts": {
+    "start": "node fetch-worker.mjs",
+    "setup": "npm install && npx playwright install chromium"
+  },
+  "dependencies": {
+    "playwright": "^1.49.0"
+  }
+}
