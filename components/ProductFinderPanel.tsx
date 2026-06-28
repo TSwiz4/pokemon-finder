@@ -126,9 +126,11 @@ export default function ProductFinderPanel({ allStores, onFlyToStore, onSearchAr
         body: JSON.stringify({ lat: center.lat, lng: center.lng, radius, chains: activeChains(), limit: SCAN_LIMIT, set: setFilter }),
       });
       const data = await res.json();
-      if (res.status === 429 || data.cooldown) {
+      if (res.status === 409 || data.busy) {
+        setStatus('Another scan is running — try again in a moment.');
+      } else if (res.status === 429 || data.cooldown) {
         setCooldown(Math.max(0, data.seconds_remaining ?? 0));
-        setStatus('On cooldown — one scan per hour (shared).');
+        setStatus('You’ve used your scan this hour.');
       } else if (data.error) {
         throw new Error(data.error);
       } else {
@@ -272,7 +274,7 @@ export default function ProductFinderPanel({ allStores, onFlyToStore, onSearchAr
         )}
         {cooldown > 0 && (
           <div style={{ marginTop: 6, fontSize: 9.5, color: '#6b7280' }}>
-            One scan per hour, shared across everyone — protects against rate limits.
+            Your scan resets hourly. Scans share one connection, so they run one at a time.
           </div>
         )}
 

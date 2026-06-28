@@ -15,15 +15,18 @@ import { NextRequest } from 'next/server';
 import getDb from '@/lib/db';
 import { scanTargetStore } from '@/lib/scanner';
 import { hasResidentialWorker } from '@/lib/retailFetch';
+import { getCurrentUser } from '@/lib/auth';
 
 const EARTH_RADIUS_MI = 3958.8;
 const DEFAULT_LIMIT = 3;
 const MAX_LIMIT = 10;
 // RedSky is burst-rate-limited — space calls ~8s apart to stay un-flagged.
 const PACE_MS = 8000;
-// Global 1-hour cooldown between Target scans — protects the shared IP from
-// Akamai rate-limiting. Enforced server-side and surfaced to the UI timer.
+// Per-PERSON 1-hour cooldown. NOTE: all scans still funnel through the one
+// residential worker IP, so a global lock (below) serializes them so they never
+// burst — the per-user cooldown is fairness, the lock is IP protection.
 const SCAN_COOLDOWN_MS = 60 * 60 * 1000;
+const SCAN_LOCK_TTL_MS = 5 * 60 * 1000; // stale-lock auto-expiry (a scan never runs this long)
 
 type DB = ReturnType<typeof getDb>;
 
@@ -34,21 +37,26 @@ function getMeta(db: DB, key: string): string | null {
 function setMeta(db: DB, key: string, value: string) {
   db.prepare('INSERT INTO app_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, value);
 }
-function cooldownRemainingMs(db: DB): number {
-  const last = getMeta(db, 'last_scan_at');
+function userCooldownKey(userId: number | null): string {
+  return `last_scan_at:u${userId ?? 'anon'}`;
+}
+function cooldownRemainingMs(db: DB, key: string): number {
+  const last = getMeta(db, key);
   if (!last) return 0;
   return Math.max(0, SCAN_COOLDOWN_MS - (Date.now() - Date.parse(last)));
 }
 
-// GET — cooldown status for the scan timer (shared across all logins).
+// GET — this user's cooldown status for the scan timer.
 export async function GET() {
   const db = getDb();
-  const remaining = cooldownRemainingMs(db);
+  const user = await getCurrentUser();
+  const key = userCooldownKey(user?.id ?? null);
+  const remaining = cooldownRemainingMs(db, key);
   return Response.json({
     can_scan: remaining === 0,
     seconds_remaining: Math.ceil(remaining / 1000),
     cooldown_seconds: SCAN_COOLDOWN_MS / 1000,
-    last_scan_at: getMeta(db, 'last_scan_at'),
+    last_scan_at: getMeta(db, key),
   });
 }
 
@@ -115,18 +123,31 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  // Enforce the global cooldown (shared IP protection).
-  const remainingMs = cooldownRemainingMs(db);
+  // Per-person cooldown: each user gets one scan per hour.
+  const user = await getCurrentUser();
+  const cdKey = userCooldownKey(user?.id ?? null);
+  const remainingMs = cooldownRemainingMs(db, cdKey);
   if (remainingMs > 0) {
     return Response.json({
       error: 'cooldown', cooldown: true,
       seconds_remaining: Math.ceil(remainingMs / 1000),
-      last_scan_at: getMeta(db, 'last_scan_at'),
+      last_scan_at: getMeta(db, cdKey),
     }, { status: 429 });
   }
-  // Claim the slot immediately so concurrent scans can't slip through.
-  setMeta(db, 'last_scan_at', new Date().toISOString());
+  // Global serializer: all scans share one residential IP, so never run two at
+  // once (that would burst the IP and trip Akamai). Stale locks auto-expire.
+  const lock = getMeta(db, 'scan_lock');
+  if (lock && Date.now() - Date.parse(lock) < SCAN_LOCK_TTL_MS) {
+    return Response.json({
+      error: 'busy', busy: true,
+      message: 'Another scan is running right now — try again in a moment.',
+    }, { status: 409 });
+  }
+  setMeta(db, 'scan_lock', new Date().toISOString());
+  // Claim this user's hourly slot now that we hold the lock.
+  setMeta(db, cdKey, new Date().toISOString());
 
+  try {
   // SKUs to scan (Target only today), optionally set-filtered.
   const setClause = setFilter ? 'AND p.set_name = ?' : '';
   const targetSkus = db.prepare(`
@@ -236,4 +257,7 @@ export async function POST(req: NextRequest) {
     stores,
     checked_at: new Date().toISOString(),
   });
+  } finally {
+    setMeta(db, 'scan_lock', ''); // release the global lock so the next scan can run
+  }
 }
